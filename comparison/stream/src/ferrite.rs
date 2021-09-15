@@ -1,15 +1,14 @@
 use ferrite_session::{either::*, prelude::*};
-use futures::lock::Mutex;
-use std::sync::Arc;
 
 struct Ready;
 struct Value(i32);
 
-type Source = ReceiveChannel<Sink, End>;
+type Source = ReceiveChannel<Sink, SendValue<Vec<i32>, End>>;
 
-type Sink = Rec<SendValue<Ready, ExternalChoice<Either<ReceiveValue<Value, Z>, End>>>>;
+type Sink =
+    Rec<SendValue<Ready, ExternalChoice<Either<ReceiveValue<Value, Z>, SendValue<Vec<i32>, End>>>>>;
 
-fn source_inner(values: Arc<[i32]>, index: usize) -> Session<Source> {
+fn source_inner(values: Vec<i32>, index: usize) -> Session<Source> {
     receive_channel(|c| {
         unfix_session(
             c,
@@ -22,39 +21,39 @@ fn source_inner(values: Arc<[i32]>, index: usize) -> Session<Source> {
                             c,
                             Value(value),
                             include_session(source_inner(values, index + 1), |consume| {
-                                send_channel_to(consume, c, wait(consume, terminate()))
+                                send_channel_to(consume, c, forward(consume))
                             })
                         )
                     );
+                } else {
+                    choose!(c, Right, forward(c))
                 }
-
-                choose!(c, Right, wait(c, terminate()))
             }),
         )
     })
 }
 
-fn source(values: Arc<[i32]>) -> Session<Source> {
+fn source(values: Vec<i32>) -> Session<Source> {
     source_inner(values, 0)
 }
 
-fn sink(output: Arc<Mutex<Vec<i32>>>) -> Session<Sink> {
+fn sink(mut output: Vec<i32>) -> Session<Sink> {
     fix_session(send_value(
         Ready,
         offer_choice!(
-            Left => {receive_value(|Value(value)|
-                step(async move {
-                    output.lock().await.push(value);
-                    sink(output)
+            Left => {
+                receive_value(move |Value(value)| {
+                        output.push(value);
+                        sink(output)
                 })
-            )}
-            Right => terminate()
+            }
+            Right => send_value(output, terminate())
         ),
     ))
 }
 
-pub async fn run(input: Arc<[i32]>) {
-    let output = Arc::new(Mutex::new(Vec::new()));
-    run_session(apply_channel(source(input.clone()), sink(output.clone()))).await;
-    assert_eq!(input.as_ref(), output.lock().await.as_slice());
+pub async fn run(input: Vec<i32>) {
+    let output =
+        run_session_with_result(apply_channel(source(input.clone()), sink(Vec::new()))).await;
+    assert_eq!(input, output);
 }

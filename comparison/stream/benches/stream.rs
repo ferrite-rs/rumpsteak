@@ -12,7 +12,7 @@ pub fn criterion_benchmark(criterion: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("ferrite", size), |bencher| {
             let rt = runtime::Builder::new_multi_thread().build().unwrap();
-            bencher.iter(|| rt.block_on(ferrite::run(input.clone())));
+            bencher.iter(|| rt.block_on(ferrite::run(Vec::from(input.as_ref()))));
         });
 
         group.bench_function(BenchmarkId::new("mpstthree", size), |bencher| {
