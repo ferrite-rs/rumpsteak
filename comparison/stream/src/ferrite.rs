@@ -8,33 +8,37 @@ type Source = ReceiveChannel<Sink, SendValue<Vec<i32>, End>>;
 type Sink =
     Rec<SendValue<Ready, ExternalChoice<Either<ReceiveValue<Value, Z>, SendValue<Vec<i32>, End>>>>>;
 
-fn source_inner(values: Vec<i32>, index: usize) -> Session<Source> {
-    receive_channel(|c| {
-        unfix_session(
-            c,
-            receive_value_from(c, move |Ready| {
-                if let Some(&value) = values.get(index) {
-                    return choose!(
+// Advanced Optimization: use a PartialSession directly with a single Sink channel
+// in the linear context. This way when the recursion point is called, there is
+// no need to reconstruct the linear context but instead use it directly.
+fn source_inner(
+    values: Vec<i32>,
+    index: usize,
+) -> PartialSession<HList![Sink], SendValue<Vec<i32>, End>> {
+    let c = Z;
+
+    unfix_session(
+        c,
+        receive_value_from(c, move |Ready| {
+            if let Some(&value) = values.get(index) {
+                return choose!(
+                    c,
+                    Left,
+                    send_value_to(
                         c,
-                        Left,
-                        send_value_to(
-                            c,
-                            Value(value),
-                            include_session(source_inner(values, index + 1), |consume| {
-                                send_channel_to(consume, c, forward(consume))
-                            })
-                        )
-                    );
-                } else {
-                    choose!(c, Right, forward(c))
-                }
-            }),
-        )
-    })
+                        Value(value),
+                        step(async move { source_inner(values, index + 1) })
+                    )
+                );
+            } else {
+                choose!(c, Right, forward(c))
+            }
+        }),
+    )
 }
 
 fn source(values: Vec<i32>) -> Session<Source> {
-    source_inner(values, 0)
+    receive_channel(|_| source_inner(values, 0))
 }
 
 fn sink(mut output: Vec<i32>) -> Session<Sink> {
